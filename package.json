@@ -6,9 +6,9 @@
   "scripts": {
     "dev": "tsx server.ts",
     "start": "node server.ts",
-    "build": "node --check app.js && rm -rf dist && mkdir -p dist && cp index.html styles.css app.js 404.html .nojekyll dist/",
+    "build": "node --check app.js && node --check cloudflare-worker.js && rm -rf dist && mkdir -p dist && cp index.html styles.css app.js cloudflare-worker.js 404.html .nojekyll dist/ && ([ -f CNAME ] && cp CNAME dist/ || true)",
     "clean": "rm -rf dist server.js",
-    "lint": "node --check app.js"
+    "lint": "node --check app.js && node --check cloudflare-worker.js"
   },
   "dependencies": {
     "@google/genai": "^2.4.0",

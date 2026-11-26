@@ -1,19 +1,18 @@
 # IndiaVisa Track
 
-Simple static HTML/CSS/JS web application (no Vite, no frontend build step required) with an optional Node/Express backend (`server.ts`) for live Indian Visa Online & IVAC Passtrack enquiries.
+100% free, zero-build static web application (`index.html`, `styles.css`, `app.js`) designed for direct GitHub Pages hosting (including custom domains like `saha.com.bd` via `CNAME`), with an optional $0 Cloudflare Worker proxy (`cloudflare-worker.js`) or Express server (`server.ts`).
 
-## Host Directly on GitHub Pages (Zero Build Step)
-
-Because the frontend consists of plain static files (`index.html`, `styles.css`, `app.js`, `404.html`, `.nojekyll`) at the repository root:
+## 100% Free Hosting on GitHub Pages (Zero Cost)
 
 1. Push this repository to GitHub (`main` branch).
 2. Open **Settings → Pages → Build and deployment → Source**.
-3. Choose **Deploy from a branch**, select **`main`** and **`/ (root)`**, and click **Save**.
-   *(Alternatively, choose **GitHub Actions** to use the included `.github/workflows/deploy-gh-pages.yml` workflow.)*
+3. Select **Deploy from a branch** → **`main`** → **`/ (root)`** and click **Save** (or select **GitHub Actions**).
+4. Works immediately at $0 cost: validates your 12-character Application ID & IVAC Center, provides 1-click credential copy + direct official portal links, and builds bilingual EN/বাংলা status reports & 1200×675 PNG cards directly in the browser.
 
-## Live Enquiries from GitHub Pages
+## Optional: 100% Free Live Dual-Portal Automation (Cloudflare Worker — $0/month)
 
-GitHub Pages only serves static files and cannot run Node.js (`server.ts`). To run live visa enquiries directly from your GitHub Pages URL:
+GitHub Pages is a static server (`POST` requests to `/api/*` are not supported there). To fetch live statuses directly inside your GitHub Pages domain (`https://saha.com.bd`) at **$0 cost forever** (100,000 requests/day, no credit card):
 
-1. Host `server.ts` (`npm install && npm start`) on any Node host (Render, Railway, Fly.io, Cloud Run).
-2. Open **Settings → Backend Server URL** in the app and paste your deployed backend URL.
+1. Open [dash.cloudflare.com](https://dash.cloudflare.com) → **Workers & Pages → Create Worker**.
+2. Open **Settings → Setup Free Worker ($0)** inside IndiaVisa Track and click **Copy cloudflare-worker.js** (or copy `cloudflare-worker.js` from this repository).
+3. Paste, click **Deploy**, copy your `https://*.workers.dev` URL, and save it under **Settings → Free Live Backend / Cloudflare Worker → Save & Test**.

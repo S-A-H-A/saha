@@ -214,7 +214,7 @@ html, body {
   transition: background-color 0.4s ease, color 0.3s ease;
 }
 
-button, input {
+button, input, select {
   font-family: inherit;
 }
 
@@ -1175,6 +1175,86 @@ a {
   .settings-themes { grid-column: span 7; }
   .settings-side { grid-column: span 5; grid-template-columns: 1fr; }
   .settings-server-card { grid-column: span 1; }
+}
+
+/* Free Static Portal Assist & Quick Report Builder */
+.assist-grid {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 18px;
+  margin-top: 16px;
+}
+.assist-cred-list {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 10px;
+}
+.assist-cred-box {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 14px;
+  border-radius: 14px;
+  border: 1px solid var(--line);
+  background: var(--inset);
+}
+.status-choice-grid {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 8px;
+}
+.status-choice-btn {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  border: 1px solid var(--line2);
+  background: var(--srf);
+  color: var(--ink);
+  font-size: 12px;
+  font-weight: 600;
+  text-align: left;
+  cursor: pointer;
+  transition: transform 0.16s ease, border-color 0.16s ease, background-color 0.16s ease;
+}
+.status-choice-btn:hover {
+  transform: translateY(-1px);
+  border-color: rgba(var(--c-sky), 0.45);
+}
+.status-choice-btn.active {
+  background: rgba(var(--c-emerald), 0.14);
+  border-color: rgba(var(--c-emerald), 0.55);
+  color: var(--ink);
+}
+.worker-guide-box {
+  margin-top: 14px;
+  padding: 14px;
+  border-radius: 14px;
+  border: 1px solid var(--line2);
+  background: var(--inset);
+}
+.worker-step-list {
+  margin: 10px 0 0;
+  padding-left: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--mut);
+}
+
+@media (min-width: 640px) {
+  .status-choice-grid { grid-template-columns: repeat(2, 1fr); }
+  .assist-cred-list { grid-template-columns: repeat(2, 1fr); }
+}
+
+@media (min-width: 900px) {
+  .assist-grid { grid-template-columns: 1fr 1.15fr; align-items: start; }
+  .assist-cred-list { grid-template-columns: 1fr; }
 }
 
 @media (prefers-reduced-motion: reduce) {

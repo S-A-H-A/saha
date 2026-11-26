@@ -27,7 +27,10 @@ jobs:
         shell: bash
         run: |
           mkdir -p _site
-          cp index.html styles.css app.js 404.html .nojekyll _site/
+          cp index.html styles.css app.js cloudflare-worker.js 404.html .nojekyll _site/
+          if [[ -f CNAME ]]; then
+            cp CNAME _site/
+          fi
           if [[ -n "${API_BASE_URL}" ]]; then
             ESCAPED_URL=$(printf '%s' "${API_BASE_URL}" | sed 's/\\/\\\\/g; s/"/\\"/g')
             sed -i "s|</head>|  <script>window.__API_BASE_URL__ = \"${ESCAPED_URL}\";</script>\n  </head>|" _site/index.html _site/404.html

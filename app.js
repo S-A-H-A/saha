@@ -35,6 +35,7 @@
     shield: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z"/></svg>`,
     server: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="20" height="8" x="2" y="2" rx="2" ry="2"/><rect width="20" height="8" x="2" y="14" rx="2" ry="2"/><line x1="6" x2="6.01" y1="6" y2="6"/><line x1="6" x2="6.01" y1="18" y2="18"/></svg>`,
     waves: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 6c.6.5 1.2 1 2.5 1C7 7 7 5 9.5 5c2.6 0 2.4 2 5 2 2.5 0 2.5-2 5-2 1.3 0 1.9.5 2.5 1"/><path d="M2 12c.6.5 1.2 1 2.5 1 2.5 0 2.5-2 5-2 2.6 0 2.4 2 5 2 2.5 0 2.5-2 5-2 1.3 0 1.9.5 2.5 1"/><path d="M2 18c.6.5 1.2 1 2.5 1 2.5 0 2.5-2 5-2 2.6 0 2.4 2 5 2 2.5 0 2.5-2 5-2 1.3 0 1.9.5 2.5 1"/></svg>`,
+    copy: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="14" height="14" x="8" y="8" rx="2" ry="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></svg>`,
   };
 
   const GLASS_THEMES = [
@@ -190,8 +191,27 @@
     return base ? `${base}${clean}` : clean;
   }
 
+  const STATUS_PRESETS = [
+    { category: "processed_printed", label: "Processed & Printed", message: "Visa Processed and Printed. Your passport is printed and ready for dispatch/collection." },
+    { category: "granted_not_printed", label: "Granted (Not Printed)", message: "Visa Granted, but Not-Printed yet. Printing queue is pending before dispatch." },
+    { category: "under_processing", label: "Under Processing", message: "Application is Under Processing at the Indian High Commission / Mission." },
+    { category: "attention_required", label: "Contact Respective Office", message: "Please contact the respective IVAC or Indian Visa Office on the next working day." },
+    { category: "closed", label: "Application Closed", message: "Application status shows Closed in the Indian Visa Online database." },
+    { category: "not_found", label: "Record Not Found", message: "No matching visa application record was found for the entered ID and Passport." },
+  ];
+
+  const PASSTRACK_STAGE_PRESETS = [
+    { stepsDone: 0, label: "Not Listed Yet" },
+    { stepsDone: 1, label: "1/4 Application Received at IVAC" },
+    { stepsDone: 2, label: "2/4 Sent to Indian High Commission" },
+    { stepsDone: 3, label: "3/4 Received from High Commission" },
+    { stepsDone: 4, label: "4/4 Ready For Delivery" },
+  ];
+
   function isStaticHost() {
-    return window.location.hostname.toLowerCase().endsWith(".github.io");
+    if (state && state.backendStatus === "static" && !getEffectiveApiBase()) return true;
+    const host = window.location.hostname.toLowerCase();
+    return host.endsWith(".github.io") || Boolean(host && host !== "localhost" && host !== "127.0.0.1" && state && state.backendStatus === "static");
   }
 
   const state = {
@@ -216,6 +236,14 @@
     visaCaptchaOverride: null,
     ptCaptchaOverride: null,
     streamError: null,
+    backendStatus: "unknown",
+    staticAssist: null,
+    assistCategory: "processed_printed",
+    assistApplicantName: "",
+    assistPasstrackStage: 4,
+    copiedField: null,
+    showWorkerGuide: false,
+    workerCopyNotice: null,
     result: null,
     previousResult: null,
     statusChangedNotice: null,
@@ -226,6 +254,27 @@
     testingApi: false,
     apiFeedback: null,
   };
+
+  async function probeBackendHealth() {
+    try {
+      const resp = await fetch(apiUrl("/api/portal-health"), { method: "GET" });
+      const ct = (resp.headers.get("content-type") || "").toLowerCase();
+      if (!resp.ok || !ct.includes("application/json")) {
+        state.backendStatus = "static";
+        return false;
+      }
+      const json = await resp.json().catch(() => null);
+      if (json && Array.isArray(json.portals)) {
+        state.backendStatus = "live";
+        return true;
+      }
+      state.backendStatus = "static";
+      return false;
+    } catch {
+      state.backendStatus = "static";
+      return false;
+    }
+  }
 
   if (!GLASS_THEMES.some((t) => t.id === state.theme)) {
     state.theme = "light";
@@ -451,7 +500,70 @@
     }, 1000);
   }
 
+  function activateStaticAssist(appId, passNo) {
+    state.backendStatus = "static";
+    state.isRunning = false;
+    state.showPipeline = false;
+    state.streamError = null;
+    state.captchaPrompt = null;
+    state.staticAssist = { appId, passNo };
+    render();
+  }
+
+  function buildAssistResult() {
+    if (!state.staticAssist) return;
+    const { appId, passNo } = state.staticAssist;
+    const preset = STATUS_PRESETS.find((p) => p.category === state.assistCategory) || STATUS_PRESETS[0];
+    const stageCount = Number(state.assistPasstrackStage) || 0;
+    const stepLabels = [
+      "Application Received at IVAC",
+      "Sent to Indian High Commission",
+      "Received from High Commission",
+      "Ready For Delivery",
+    ];
+    const ptTable =
+      stageCount > 0
+        ? [
+            ["Sl", "Step", "Status"],
+            ...stepLabels.map((lbl, i) => [String(i + 1), lbl, i < stageCount ? "Done" : "Pending"]),
+          ]
+        : [];
+
+    const payload = {
+      status: "success",
+      application_id: appId,
+      passport_no: passNo,
+      checked_at: new Date().toISOString(),
+      elapsed_ms: 0,
+      source_mode: "manual_portal",
+      visa_portal: {
+        status: "success",
+        message: preset.message,
+        category: preset.category,
+        label: preset.label,
+      },
+      passtrack: {
+        status: stageCount > 0 ? "success" : "not-found",
+        applicant_name: state.assistApplicantName.trim() || "Unknown",
+        table: ptTable,
+        message: stageCount > 0 ? undefined : "Not listed on Passtrack yet.",
+      },
+    };
+
+    state.staticAssist = null;
+    state.previousResult = payload;
+    state.result = payload;
+    state.statusChangedNotice = null;
+    addResultToHistory(payload);
+    render();
+  }
+
   async function runLiveCheck(opts) {
+    if (state.backendStatus === "static" && !getEffectiveApiBase()) {
+      activateStaticAssist(opts.appId, opts.passNo);
+      return;
+    }
+
     if (abortController) abortController.abort();
     abortController = new AbortController();
 
@@ -459,6 +571,7 @@
     state.isRunning = true;
     state.showPipeline = true;
     state.streamError = null;
+    state.staticAssist = null;
     state.captchaPrompt = null;
     state.visaCaptchaOverride = null;
     state.ptCaptchaOverride = null;
@@ -488,20 +601,26 @@
         }),
       });
 
+      const contentType = (resp.headers.get("content-type") || "").toLowerCase();
+      if (resp.status === 404 || resp.status === 405 || (resp.ok && contentType.includes("text/html"))) {
+        activateStaticAssist(opts.appId, opts.passNo);
+        return;
+      }
+
       if (!resp.ok) {
         const errJson = await resp.json().catch(() => null);
-        if ((resp.status === 404 || resp.status === 405 || !errJson) && isStaticHost()) {
-          throw new Error(
-            "Static GitHub Pages hosting cannot run direct portal queries without a backend server. Connect a backend URL in Settings or open the official portals below."
-          );
+        if (!errJson) {
+          activateStaticAssist(opts.appId, opts.passNo);
+          return;
         }
-        throw new Error(errJson?.error || `Server returned HTTP ${resp.status}.`);
+        throw new Error(errJson.error || `Server returned HTTP ${resp.status}.`);
       }
 
       if (!resp.body) {
         throw new Error("Streaming response unavailable from server.");
       }
 
+      state.backendStatus = "live";
       const reader = resp.body.getReader();
       const decoder = new TextDecoder();
       let buffer = "";
@@ -567,12 +686,11 @@
         render();
         return;
       }
-      if (err instanceof TypeError && isStaticHost() && !getEffectiveApiBase()) {
-        state.streamError =
-          "GitHub Pages is a static host. Connect your backend server in Settings or check directly on the official portals below.";
-      } else {
-        state.streamError = err instanceof Error ? err.message : "Could not complete live status enquiry.";
+      if (err instanceof TypeError && !getEffectiveApiBase()) {
+        activateStaticAssist(opts.appId, opts.passNo);
+        return;
       }
+      state.streamError = err instanceof Error ? err.message : "Could not complete live status enquiry.";
       state.isRunning = false;
       render();
     }
@@ -1222,15 +1340,17 @@
           </div>
         ` : ""}
 
+        ${renderStaticAssist()}
+
         ${renderPipeline()}
 
-        ${state.result ? renderStatusReport() : !state.showPipeline ? `
+        ${state.result ? renderStatusReport() : !state.showPipeline && !state.staticAssist ? `
           <section class="overview-grid animate-rise">
             <div class="glass-panel overview-card">
               ${iconTile("amber", 38, "shieldCheck")}
               <div>
                 <h3 class="card-title" style="font-size:14px">Visa Decision</h3>
-                <p class="card-sub" style="font-size:12px">Live lookup on Indian Visa Online</p>
+                <p class="card-sub" style="font-size:12px">Indian Visa Online &amp; bilingual guidance</p>
               </div>
             </div>
             <div class="glass-panel overview-card">
@@ -1243,13 +1363,118 @@
             <div class="glass-panel overview-card">
               ${iconTile("emerald", 38, "sparkles")}
               <div>
-                <h3 class="card-title" style="font-size:14px">Export &amp; Auto-Watch</h3>
-                <p class="card-sub" style="font-size:12px">Save PNG cards &amp; monitor updates</p>
+                <h3 class="card-title" style="font-size:14px">100% Free Hosting</h3>
+                <p class="card-sub" style="font-size:12px">Works free on GitHub Pages &amp; Worker proxy</p>
               </div>
             </div>
           </section>
         ` : ""}
       </div>
+    `;
+  }
+
+  function renderStaticAssist() {
+    if (!state.staticAssist) return "";
+    const { appId, passNo } = state.staticAssist;
+    const center = resolveIvacCenter(appId);
+
+    return `
+      <section aria-label="Free Static Portal Assist" class="glass-panel card-pad animate-rise">
+        <div class="flex-between" style="flex-wrap:wrap;gap:12px;padding-bottom:16px;border-bottom:1px solid var(--line2)">
+          <div class="flex-row">
+            ${iconTile("sky", 42, "globe")}
+            <div>
+              <h3 class="card-title" style="font-size:17px">Free Portal Check &amp; Status Card Builder</h3>
+              <p class="card-sub" style="font-size:12px">
+                Running free on static hosting (${esc(window.location.hostname)}). Copy your verified IDs below to check directly on the official government portals, or connect a 100% free Cloudflare Worker in Settings.
+              </p>
+            </div>
+          </div>
+          <div class="flex-row" style="flex-wrap:wrap">
+            <button type="button" data-action="nav" data-section="appearance" class="btn-glass-ghost" style="padding:7px 12px;font-size:12px">Connect Free Worker ($0)</button>
+            <button type="button" data-action="close-assist" class="btn-glass-ghost" style="padding:7px 12px;font-size:12px">Dismiss</button>
+          </div>
+        </div>
+
+        <div class="assist-grid">
+          <div style="display:flex;flex-direction:column;gap:14px">
+            <div class="assist-cred-list">
+              <div class="assist-cred-box">
+                <div style="min-width:0">
+                  <div class="field-label">Application ID · ${center ? esc(center.shortName) : "IVAC"}</div>
+                  <div class="font-mono" style="margin-top:2px;font-size:15px;font-weight:700;color:var(--tx-info)">
+                    ${state.maskAppId ? `${esc(appId.slice(0, 4))}••••••••` : esc(appId)}
+                  </div>
+                </div>
+                <button type="button" data-action="copy-text" data-field="app" data-value="${esc(appId)}" class="btn-glass-ghost" style="padding:7px 12px;font-size:12px">
+                  <span style="width:14px;height:14px;display:inline-flex">${state.copiedField === "app" ? ICONS.check : ICONS.copy}</span>
+                  <span>${state.copiedField === "app" ? "Copied" : "Copy ID"}</span>
+                </button>
+              </div>
+
+              <div class="assist-cred-box">
+                <div style="min-width:0">
+                  <div class="field-label">Passport Number</div>
+                  <div class="font-mono" style="margin-top:2px;font-size:15px;font-weight:700">
+                    ${state.maskPassport ? `${esc(passNo.slice(0, 2))}••••••` : esc(passNo)}
+                  </div>
+                </div>
+                <button type="button" data-action="copy-text" data-field="pass" data-value="${esc(passNo)}" class="btn-glass-ghost" style="padding:7px 12px;font-size:12px">
+                  <span style="width:14px;height:14px;display:inline-flex">${state.copiedField === "pass" ? ICONS.check : ICONS.copy}</span>
+                  <span>${state.copiedField === "pass" ? "Copied" : "Copy Passport"}</span>
+                </button>
+              </div>
+            </div>
+
+            <div style="display:flex;flex-wrap:wrap;gap:10px">
+              <a href="https://indianvisaonline.gov.in/visa/StatusEnquiry" target="_blank" rel="noopener noreferrer" class="btn-glass-primary" style="flex:1;min-width:190px;padding:11px 16px;font-size:13px">
+                <span>1. Open Indian Visa Online</span>
+                <span style="width:14px;height:14px;display:inline-flex">${ICONS.externalLink}</span>
+              </a>
+              <a href="https://www.passtrack.net/regular_passport.php" target="_blank" rel="noopener noreferrer" class="btn-glass-ghost" style="flex:1;min-width:170px;padding:11px 14px;font-size:13px">
+                <span>2. Open IVAC Passtrack</span>
+                <span style="width:14px;height:14px;display:inline-flex">${ICONS.externalLink}</span>
+              </a>
+            </div>
+          </div>
+
+          <form id="staticAssistForm" class="glass-inset" style="padding:16px;display:flex;flex-direction:column;gap:12px">
+            <div>
+              <div class="font-display" style="font-size:14px;font-weight:700">Generate Bilingual Report &amp; PNG Card</div>
+              <p style="margin:2px 0 0;font-size:12px;color:var(--mut)">Select the result shown on the official portal to save &amp; export your card free.</p>
+            </div>
+
+            <div class="status-choice-grid">
+              ${STATUS_PRESETS.map((preset) => `
+                <button type="button" data-action="set-assist-cat" data-cat="${preset.category}" class="status-choice-btn ${state.assistCategory === preset.category ? "active" : ""}">
+                  <span>${esc(preset.label)}</span>
+                  ${state.assistCategory === preset.category ? `<span style="width:14px;height:14px;color:var(--tx-pos);display:inline-flex">${ICONS.check}</span>` : ""}
+                </button>
+              `).join("")}
+            </div>
+
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+              <div>
+                <label for="assistApplicantInput" class="field-label" style="display:block;margin-bottom:4px">Applicant Name (Optional)</label>
+                <input id="assistApplicantInput" type="text" value="${esc(state.assistApplicantName)}" placeholder="e.g., RAHIM UDDIN" class="glass-input" style="width:100%;height:38px;padding:0 12px;font-size:12px" />
+              </div>
+              <div>
+                <label for="assistPasstrackSelect" class="field-label" style="display:block;margin-bottom:4px">IVAC Delivery Stage</label>
+                <select id="assistPasstrackSelect" class="glass-input" style="width:100%;height:38px;padding:0 10px;font-size:12px">
+                  ${PASSTRACK_STAGE_PRESETS.map((st) => `<option value="${st.stepsDone}" ${Number(state.assistPasstrackStage) === st.stepsDone ? "selected" : ""}>${esc(st.label)}</option>`).join("")}
+                </select>
+              </div>
+            </div>
+
+            <div style="display:flex;justify-content:flex-end">
+              <button type="submit" class="btn-glass-emerald" style="padding:10px 18px;font-size:13px">
+                <span style="width:15px;height:15px;display:inline-flex">${ICONS.sparkles}</span>
+                <span>Generate Report &amp; Save</span>
+              </button>
+            </div>
+          </form>
+        </div>
+      </section>
     `;
   }
 
@@ -1496,20 +1721,42 @@
               </div>
             </section>
 
-            <section aria-label="Backend Server URL" class="glass-panel card-pad settings-server-card">
-              <div class="flex-row" style="margin-bottom:4px">
-                <span style="width:20px;height:20px;color:var(--tx-info);display:inline-flex">${ICONS.server}</span>
-                <h3 class="card-title" style="font-size:16px">Backend Server URL</h3>
+            <section aria-label="Free Live Backend & Cloudflare Worker" class="glass-panel card-pad settings-server-card">
+              <div class="flex-between" style="flex-wrap:wrap;gap:8px;margin-bottom:4px">
+                <div class="flex-row">
+                  <span style="width:20px;height:20px;color:var(--tx-info);display:inline-flex">${ICONS.server}</span>
+                  <h3 class="card-title" style="font-size:16px">Free Live Backend / Cloudflare Worker</h3>
+                </div>
+                <span class="font-mono" style="font-size:11px;font-weight:700;color:${state.backendStatus === "live" ? "var(--tx-pos)" : "var(--tx-info)"}">
+                  ${state.backendStatus === "live" ? "Live Connected" : "Free Static Mode"}
+                </span>
               </div>
-              <p class="card-sub" style="margin-bottom:14px;font-size:12px">Optional on Express. Required when hosted statically on GitHub Pages for live portal queries.</p>
+              <p class="card-sub" style="margin-bottom:14px;font-size:12px">Connect a 100% free Cloudflare Worker ($0/mo, 100,000 requests/day) or Node server to run live dual-portal queries directly from ${esc(window.location.hostname || "your domain")}.</p>
               <form id="apiSettingsForm" style="display:flex;flex-direction:column;gap:10px">
-                <input id="apiUrlInput" type="url" value="${esc(state.apiInput)}" placeholder="https://your-backend.onrender.com" aria-label="Backend Server URL" class="glass-input" style="height:40px;width:100%;padding:0 12px;font-family:var(--font-mono);font-size:12px" />
+                <input id="apiUrlInput" type="url" value="${esc(state.apiInput)}" placeholder="https://indiavisa-proxy.yourname.workers.dev" aria-label="Backend or Cloudflare Worker URL" class="glass-input" style="height:40px;width:100%;padding:0 12px;font-family:var(--font-mono);font-size:12px" />
                 <div class="flex-row" style="flex-wrap:wrap">
                   <button type="submit" ${state.testingApi ? "disabled" : ""} class="btn-glass-primary" style="padding:8px 14px;font-size:12px">${state.testingApi ? "Testing..." : "Save & Test"}</button>
                   <button type="button" data-action="reset-api" class="btn-glass-ghost" style="padding:8px 14px;font-size:12px">Reset Default</button>
+                  <button type="button" data-action="toggle-worker-guide" class="btn-glass-ghost" style="padding:8px 14px;font-size:12px">${state.showWorkerGuide ? "Hide Free Setup Guide" : "Setup Free Worker ($0)"}</button>
                 </div>
               </form>
               ${state.apiFeedback ? `<p style="margin:10px 0 0;font-size:12px;font-weight:600;color:${state.apiFeedback.ok ? "var(--tx-pos)" : "var(--tx-neg)"}">${esc(state.apiFeedback.text)}</p>` : ""}
+              ${state.showWorkerGuide ? `
+                <div class="worker-guide-box">
+                  <div class="flex-between" style="flex-wrap:wrap;gap:8px">
+                    <strong class="font-display" style="font-size:13px">2-Minute Free Cloudflare Worker Setup ($0 Forever)</strong>
+                    <button type="button" data-action="copy-worker-code" class="btn-glass-emerald" style="padding:6px 12px;font-size:11px">
+                      <span style="width:13px;height:13px;display:inline-flex">${ICONS.copy}</span>
+                      <span>${state.workerCopyNotice || "Copy cloudflare-worker.js"}</span>
+                    </button>
+                  </div>
+                  <ol class="worker-step-list">
+                    <li>Open <a href="https://dash.cloudflare.com" target="_blank" rel="noopener noreferrer" style="color:var(--tx-info);text-decoration:underline">dash.cloudflare.com</a> (free account, no card) → <strong>Workers &amp; Pages → Create Worker</strong>.</li>
+                    <li>Click <strong>Copy cloudflare-worker.js</strong> above, paste it into the Worker editor, and click <strong>Deploy</strong>.</li>
+                    <li>Copy your free <code>https://*.workers.dev</code> URL, paste it in the box above, and click <strong>Save &amp; Test</strong>.</li>
+                  </ol>
+                </div>
+              ` : ""}
             </section>
           </div>
         </div>
@@ -1584,6 +1831,8 @@
     } else if (target.id === "apiUrlInput") {
       state.apiInput = target.value;
       state.apiFeedback = null;
+    } else if (target.id === "assistApplicantInput") {
+      state.assistApplicantName = target.value.toUpperCase();
     } else if (target.id === "submissionDatePicker") {
       state.submissionDate = target.value;
       render();
@@ -1592,6 +1841,10 @@
 
   document.addEventListener("change", async (e) => {
     const target = e.target;
+    if (target instanceof HTMLSelectElement && target.id === "assistPasstrackSelect") {
+      state.assistPasstrackStage = Number(target.value) || 0;
+      return;
+    }
     if (!(target instanceof HTMLInputElement)) return;
     if (target.id !== "receiptFileInput") return;
     const file = target.files && target.files[0];
@@ -1603,6 +1856,36 @@
     render();
 
     try {
+      // 1. Try 100% free browser-native QR/Barcode detection first (works offline on Chrome/Android)
+      if ("BarcodeDetector" in window) {
+        try {
+          const bitmap = await createImageBitmap(file);
+          const detector = new window.BarcodeDetector({ formats: ["qr_code", "code_128", "code_39", "pdf417"] });
+          const codes = await detector.detect(bitmap);
+          bitmap.close?.();
+          for (const code of codes) {
+            const raw = String(code.rawValue || "").toUpperCase();
+            const appMatch = raw.match(/\b(BGD[A-Z0-9]{9})\b/);
+            if (appMatch) {
+              state.applicationId = appMatch[1];
+              state.scanNotice = "Application ID extracted via free offline barcode scan. Verify Passport Number and check status.";
+              state.scanningReceipt = false;
+              render();
+              return;
+            }
+          }
+        } catch {
+          // continue to backend scan if available
+        }
+      }
+
+      if (state.backendStatus === "static" && !getEffectiveApiBase()) {
+        state.scanNotice = "Enter your 12-character Application ID and Passport Number directly above — works 100% free with zero setup.";
+        state.scanningReceipt = false;
+        render();
+        return;
+      }
+
       const dataUrl = await new Promise((resolve, reject) => {
         const reader = new FileReader();
         reader.onload = () => resolve(String(reader.result));
@@ -1616,10 +1899,10 @@
       });
       const json = await resp.json().catch(() => null);
       if (!resp.ok || !json) {
-        if ((resp.status === 404 || resp.status === 405 || !json) && isStaticHost()) {
-          state.scanNotice = "Static GitHub Pages hosting cannot run receipt OCR without a connected backend API URL.";
+        if (resp.status === 404 || resp.status === 405 || !json) {
+          state.scanNotice = "Enter your 12-character Application ID and Passport Number directly above — works 100% free.";
         } else {
-          state.scanNotice = (json && json.error) || "Could not extract details from receipt.";
+          state.scanNotice = json.error || "Could not extract details from receipt.";
         }
       } else {
         let found = false;
@@ -1664,6 +1947,9 @@
       }
       state.validationError = null;
       runLiveCheck({ appId, passNo });
+    } else if (form.id === "staticAssistForm") {
+      e.preventDefault();
+      buildAssistResult();
     } else if (form.id === "manualCaptchaForm" && state.captchaPrompt) {
       e.preventDefault();
       const visaInput = document.getElementById("visaCaptchaInput");
@@ -1698,18 +1984,22 @@
       try {
         const resp = await fetch(apiUrl("/api/portal-health"));
         const json = await resp.json().catch(() => null);
-        if (resp.ok && json && json.localAutoSolver) {
+        if (resp.ok && json && Array.isArray(json.portals)) {
+          state.backendStatus = "live";
+          const kind = json.workerRelay ? "Free Cloudflare Worker" : "Node/Express Server";
           state.apiFeedback = {
             ok: true,
-            text: normalized ? `Connected to ${normalized}` : "Connected to same-origin backend server.",
+            text: normalized ? `Connected to ${kind} at ${normalized}` : `Connected to ${kind} (same-origin).`,
           };
         } else {
+          state.backendStatus = "static";
           state.apiFeedback = {
             ok: false,
-            text: `Endpoint responded with HTTP ${resp.status}. Ensure server.ts is running at that URL.`,
+            text: `Endpoint responded with HTTP ${resp.status}. Deploy cloudflare-worker.js or server.ts at that URL.`,
           };
         }
       } catch {
+        state.backendStatus = "static";
         state.apiFeedback = {
           ok: false,
           text: "Could not reach backend endpoint. Verify the URL and CORS configuration.",
@@ -1755,6 +2045,44 @@
       state.showPipeline = false;
       state.captchaPrompt = null;
       render();
+    } else if (action === "close-assist") {
+      state.staticAssist = null;
+      render();
+    } else if (action === "set-assist-cat") {
+      state.assistCategory = btn.getAttribute("data-cat") || "processed_printed";
+      render();
+    } else if (action === "copy-text") {
+      const field = btn.getAttribute("data-field");
+      const val = btn.getAttribute("data-value") || "";
+      if (val && navigator.clipboard) {
+        navigator.clipboard.writeText(val).catch(() => {});
+      }
+      state.copiedField = field;
+      render();
+      setTimeout(() => {
+        if (state.copiedField === field) {
+          state.copiedField = null;
+          render();
+        }
+      }, 1500);
+    } else if (action === "toggle-worker-guide") {
+      state.showWorkerGuide = !state.showWorkerGuide;
+      state.workerCopyNotice = null;
+      render();
+    } else if (action === "copy-worker-code") {
+      try {
+        const res = await fetch("./cloudflare-worker.js");
+        const code = await res.text();
+        await navigator.clipboard.writeText(code);
+        state.workerCopyNotice = "Copied!";
+      } catch {
+        state.workerCopyNotice = "Open /cloudflare-worker.js";
+      }
+      render();
+      setTimeout(() => {
+        state.workerCopyNotice = null;
+        render();
+      }, 2200);
     } else if (action === "refresh-captcha") {
       const portal = btn.getAttribute("data-portal");
       try {
@@ -1807,11 +2135,14 @@
         ok: true,
         text: envUrl ? `Reset to build default (${envUrl}).` : "Reset to same-origin default (/api/*).",
       };
-      render();
+      probeBackendHealth().then(() => render());
     }
   });
 
   // Boot
   applyTheme(state.theme);
   document.documentElement.lang = state.lang;
+  probeBackendHealth().then(() => {
+    if (state.activeSection === "appearance") render();
+  });
 })();
