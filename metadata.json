@@ -1,0 +1,6 @@
+{
+  "name": "IndiaVisa Track",
+  "description": "Real-time Indian Visa & IVAC Passtrack status tracker with live dual-portal verification, timeline analytics, and exportable status cards.",
+  "requestFramePermissions": ["camera"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
