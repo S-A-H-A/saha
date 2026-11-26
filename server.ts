@@ -3,7 +3,6 @@ import express from "express";
 import path from "path";
 import crypto from "crypto";
 import { fileURLToPath } from "url";
-import { createServer as createViteServer } from "vite";
 import * as cheerio from "cheerio";
 import sharp from "sharp";
 import { DdddOcr, MODEL_TYPE } from "ddddocr-node";
@@ -589,6 +588,28 @@ async function submitPasstrackQuery(
 async function startServer() {
   const app = express();
   app.use(express.json({ limit: "8mb" }));
+
+  // CORS support so static deployments (e.g. GitHub Pages) can query a hosted backend
+  const allowedOrigins = (process.env.ALLOWED_ORIGIN || "*")
+    .split(",")
+    .map((o) => o.trim())
+    .filter(Boolean);
+
+  app.use("/api", (req, res, next) => {
+    const requestOrigin = req.headers.origin;
+    if (allowedOrigins.includes("*")) {
+      res.setHeader("Access-Control-Allow-Origin", "*");
+    } else if (requestOrigin && allowedOrigins.includes(requestOrigin)) {
+      res.setHeader("Access-Control-Allow-Origin", requestOrigin);
+      res.setHeader("Vary", "Origin");
+    }
+    res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+    res.setHeader("Access-Control-Allow-Headers", "Content-Type, Accept");
+    if (req.method === "OPTIONS") {
+      return res.status(204).end();
+    }
+    next();
+  });
 
   // Live portal reachability & latency check
   app.get("/api/portal-health", async (_req, res) => {
@@ -1243,19 +1264,29 @@ async function startServer() {
     }
   });
 
-  if (process.env.NODE_ENV !== "production") {
-    const vite = await createViteServer({
-      server: { middlewareMode: true },
-      appType: "spa",
-    });
-    app.use(vite.middlewares);
-  } else {
-    const distDir = path.resolve(__dirname, "dist");
-    app.use(express.static(distDir));
-    app.get("*", (_req, res) => {
-      res.sendFile(path.join(distDir, "index.html"));
+  const rootDir = __dirname;
+  const staticFiles: Record<string, { file: string; type: string }> = {
+    "/": { file: "index.html", type: "text/html; charset=utf-8" },
+    "/index.html": { file: "index.html", type: "text/html; charset=utf-8" },
+    "/styles.css": { file: "styles.css", type: "text/css; charset=utf-8" },
+    "/app.js": { file: "app.js", type: "application/javascript; charset=utf-8" },
+    "/404.html": { file: "404.html", type: "text/html; charset=utf-8" },
+  };
+
+  for (const [routePath, asset] of Object.entries(staticFiles)) {
+    app.get(routePath, (_req, res) => {
+      res.type(asset.type);
+      res.sendFile(path.join(rootDir, asset.file));
     });
   }
+
+  app.get("*", (req, res, next) => {
+    if (req.path.startsWith("/api/")) {
+      return next();
+    }
+    res.type("text/html; charset=utf-8");
+    return res.sendFile(path.join(rootDir, "index.html"));
+  });
 
   app.listen(PORT, "0.0.0.0", () => {
     console.log(`IndiaVisa Track server listening on http://localhost:${PORT}`);
