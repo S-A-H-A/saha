@@ -597,24 +597,36 @@ export default {
                 visaResult = { status: "error", message: parsed.message };
                 visaResolved = true;
               }
-            } else {
-              const init = await initIndianVisaSession();
+            } else if (apiKey) {
               sendEvent("step", { step: 2, state: "completed", elapsedMs: Date.now() - startedAt });
-              sendEvent("step", { step: 3, state: "active", message: apiKey ? "Solving access code automatically" : "Fetching official portal access code", elapsedMs: Date.now() - startedAt });
-              const guess = apiKey ? await solveCaptchaWithGeminiFreeTier(apiKey, init.captchaBase64, init.captchaMime, "indianvisa") : null;
-              if (guess) {
-                const parsed = await submitIndianVisaQuery(init.session, appId, passportNo, guess);
-                if (parsed.type === "status") {
-                  const c = classifyIndianVisaMessage(parsed.message);
-                  visaResult = { status: "success", message: parsed.message, category: c.category, label: c.label };
-                  visaResolved = true;
-                } else {
+              sendEvent("step", { step: 3, state: "active", message: "Automatically solving access code & querying Indian Visa Online", elapsedMs: Date.now() - startedAt });
+              for (let attempt = 1; attempt <= 3; attempt++) {
+                const init = await initIndianVisaSession();
+                const guess = await solveCaptchaWithGeminiFreeTier(apiKey, init.captchaBase64, init.captchaMime, "indianvisa");
+                if (guess) {
+                  const parsed = await submitIndianVisaQuery(init.session, appId, passportNo, guess);
+                  if (parsed.type === "status") {
+                    const c = classifyIndianVisaMessage(parsed.message);
+                    visaResult = { status: "success", message: parsed.message, category: c.category, label: c.label };
+                    visaResolved = true;
+                    break;
+                  }
+                  if (parsed.type === "unknown_error") {
+                    visaResult = { status: "error", message: parsed.message };
+                    visaResolved = true;
+                    break;
+                  }
+                }
+                if (attempt === 3) {
                   const fresh = await initIndianVisaSession();
                   pendingCaptchaNeeded.visa = { sessionId: fresh.sessionId, imageDataUrl: fresh.imageDataUrl };
                 }
-              } else {
-                pendingCaptchaNeeded.visa = { sessionId: init.sessionId, imageDataUrl: init.imageDataUrl };
               }
+            } else {
+              const init = await initIndianVisaSession();
+              sendEvent("step", { step: 2, state: "completed", elapsedMs: Date.now() - startedAt });
+              sendEvent("step", { step: 3, state: "active", message: "Fetching official portal access code", elapsedMs: Date.now() - startedAt });
+              pendingCaptchaNeeded.visa = { sessionId: init.sessionId, imageDataUrl: init.imageDataUrl };
             }
             sendEvent("step", { step: 3, state: visaResolved ? "completed" : "pending", elapsedMs: Date.now() - startedAt });
 
@@ -645,26 +657,40 @@ export default {
                   passtrackResult = { status: "error", applicant_name: "Unknown", table: [], message: pt.message };
                   passtrackResolved = true;
                 }
-              } else {
-                const initPt = await initPasstrackSession();
+              } else if (apiKey) {
                 sendEvent("step", { step: 4, state: "completed", elapsedMs: Date.now() - startedAt });
-                sendEvent("step", { step: 5, state: "active", message: apiKey ? "Solving Passtrack code" : "Fetching official Passtrack code", elapsedMs: Date.now() - startedAt });
-                const guessPt = apiKey ? await solveCaptchaWithGeminiFreeTier(apiKey, initPt.captchaBase64, initPt.captchaMime, "passtrack") : null;
-                if (guessPt) {
-                  const pt = await submitPasstrackQuery(initPt.session, appId, guessPt);
-                  if (pt.type === "success") {
-                    passtrackResult = { status: "success", applicant_name: pt.applicantName, table: pt.table };
-                    passtrackResolved = true;
-                  } else if (pt.type === "not_found") {
-                    passtrackResult = { status: "not-found", applicant_name: pt.applicantName, table: [], message: pt.message };
-                    passtrackResolved = true;
-                  } else {
+                sendEvent("step", { step: 5, state: "active", message: "Automatically solving Passtrack code & loading timeline", elapsedMs: Date.now() - startedAt });
+                for (let attempt = 1; attempt <= 3; attempt++) {
+                  const initPt = await initPasstrackSession();
+                  const guessPt = await solveCaptchaWithGeminiFreeTier(apiKey, initPt.captchaBase64, initPt.captchaMime, "passtrack");
+                  if (guessPt) {
+                    const pt = await submitPasstrackQuery(initPt.session, appId, guessPt);
+                    if (pt.type === "success") {
+                      passtrackResult = { status: "success", applicant_name: pt.applicantName, table: pt.table };
+                      passtrackResolved = true;
+                      break;
+                    }
+                    if (pt.type === "not_found") {
+                      passtrackResult = { status: "not-found", applicant_name: pt.applicantName, table: [], message: pt.message };
+                      passtrackResolved = true;
+                      break;
+                    }
+                    if (pt.type === "server_error") {
+                      passtrackResult = { status: "error", applicant_name: "Unknown", table: [], message: pt.message };
+                      passtrackResolved = true;
+                      break;
+                    }
+                  }
+                  if (attempt === 3) {
                     const fresh = await initPasstrackSession();
                     pendingCaptchaNeeded.passtrack = { sessionId: fresh.sessionId, imageDataUrl: fresh.imageDataUrl };
                   }
-                } else {
-                  pendingCaptchaNeeded.passtrack = { sessionId: initPt.sessionId, imageDataUrl: initPt.imageDataUrl };
                 }
+              } else {
+                const initPt = await initPasstrackSession();
+                sendEvent("step", { step: 4, state: "completed", elapsedMs: Date.now() - startedAt });
+                sendEvent("step", { step: 5, state: "active", message: "Fetching official Passtrack code", elapsedMs: Date.now() - startedAt });
+                pendingCaptchaNeeded.passtrack = { sessionId: initPt.sessionId, imageDataUrl: initPt.imageDataUrl };
               }
             } catch (ptErr) {
               passtrackResult = { status: "error", applicant_name: "Unknown", table: [], message: ptErr?.message || "Passtrack connection error." };

@@ -191,27 +191,14 @@
     return base ? `${base}${clean}` : clean;
   }
 
-  const STATUS_PRESETS = [
-    { category: "processed_printed", label: "Processed & Printed", message: "Visa Processed and Printed. Your passport is printed and ready for dispatch/collection." },
-    { category: "granted_not_printed", label: "Granted (Not Printed)", message: "Visa Granted, but Not-Printed yet. Printing queue is pending before dispatch." },
-    { category: "under_processing", label: "Under Processing", message: "Application is Under Processing at the Indian High Commission / Mission." },
-    { category: "attention_required", label: "Contact Respective Office", message: "Please contact the respective IVAC or Indian Visa Office on the next working day." },
-    { category: "closed", label: "Application Closed", message: "Application status shows Closed in the Indian Visa Online database." },
-    { category: "not_found", label: "Record Not Found", message: "No matching visa application record was found for the entered ID and Passport." },
-  ];
-
-  const PASSTRACK_STAGE_PRESETS = [
-    { stepsDone: 0, label: "Not Listed Yet" },
-    { stepsDone: 1, label: "1/4 Application Received at IVAC" },
-    { stepsDone: 2, label: "2/4 Sent to Indian High Commission" },
-    { stepsDone: 3, label: "3/4 Received from High Commission" },
-    { stepsDone: 4, label: "4/4 Ready For Delivery" },
-  ];
+  function isKnownStaticDomain() {
+    const host = window.location.hostname.toLowerCase();
+    return host.endsWith(".github.io");
+  }
 
   function isStaticHost() {
-    if (state && state.backendStatus === "static" && !getEffectiveApiBase()) return true;
-    const host = window.location.hostname.toLowerCase();
-    return host.endsWith(".github.io") || Boolean(host && host !== "localhost" && host !== "127.0.0.1" && state && state.backendStatus === "static");
+    if (getEffectiveApiBase()) return false;
+    return state.backendStatus === "static" || isKnownStaticDomain();
   }
 
   const state = {
@@ -237,11 +224,8 @@
     ptCaptchaOverride: null,
     streamError: null,
     backendStatus: "unknown",
-    staticAssist: null,
-    assistCategory: "processed_printed",
-    assistApplicantName: "",
-    assistPasstrackStage: 4,
-    copiedField: null,
+    pendingAutoFetchSetup: null,
+    inlineWorkerFeedback: null,
     showWorkerGuide: false,
     workerCopyNotice: null,
     result: null,
@@ -261,20 +245,27 @@
     if (!force && backendProbePromise) return backendProbePromise;
     backendProbePromise = (async () => {
       const configuredBase = getEffectiveApiBase();
+      const host = window.location.hostname.toLowerCase();
+
       if (!configuredBase) {
+        if (host === "localhost" || host === "127.0.0.1" || host.endsWith(".run.app")) {
+          state.backendStatus = "live";
+          return true;
+        }
         try {
           const headResp = await fetch("./index.html", { method: "HEAD", cache: "no-store" });
           const backendHeader = (headResp.headers.get("x-visatrack-backend") || "").toLowerCase();
-          const host = window.location.hostname.toLowerCase();
-          if (backendHeader === "express" || host === "localhost" || host === "127.0.0.1") {
+          const serverHeader = (headResp.headers.get("server") || "").toLowerCase();
+          if (backendHeader === "express") {
             state.backendStatus = "live";
             return true;
           }
-          state.backendStatus = "static";
-          return false;
+          if (serverHeader.includes("github") || headResp.headers.has("x-github-request-id") || host.endsWith(".github.io")) {
+            state.backendStatus = "static";
+            return false;
+          }
         } catch {
-          state.backendStatus = "static";
-          return false;
+          // continue to health check
         }
       }
 
@@ -531,68 +522,21 @@
     }, 1000);
   }
 
-  function activateStaticAssist(appId, passNo) {
+  function activateAutoFetchSetup(appId, passNo) {
     state.backendStatus = "static";
     state.isRunning = false;
     state.showPipeline = false;
     state.streamError = null;
     state.captchaPrompt = null;
-    state.staticAssist = { appId, passNo };
-    render();
-  }
-
-  function buildAssistResult() {
-    if (!state.staticAssist) return;
-    const { appId, passNo } = state.staticAssist;
-    const preset = STATUS_PRESETS.find((p) => p.category === state.assistCategory) || STATUS_PRESETS[0];
-    const stageCount = Number(state.assistPasstrackStage) || 0;
-    const stepLabels = [
-      "Application Received at IVAC",
-      "Sent to Indian High Commission",
-      "Received from High Commission",
-      "Ready For Delivery",
-    ];
-    const ptTable =
-      stageCount > 0
-        ? [
-            ["Sl", "Step", "Status"],
-            ...stepLabels.map((lbl, i) => [String(i + 1), lbl, i < stageCount ? "Done" : "Pending"]),
-          ]
-        : [];
-
-    const payload = {
-      status: "success",
-      application_id: appId,
-      passport_no: passNo,
-      checked_at: new Date().toISOString(),
-      elapsed_ms: 0,
-      source_mode: "manual_portal",
-      visa_portal: {
-        status: "success",
-        message: preset.message,
-        category: preset.category,
-        label: preset.label,
-      },
-      passtrack: {
-        status: stageCount > 0 ? "success" : "not-found",
-        applicant_name: state.assistApplicantName.trim() || "Unknown",
-        table: ptTable,
-        message: stageCount > 0 ? undefined : "Not listed on Passtrack yet.",
-      },
-    };
-
-    state.staticAssist = null;
-    state.previousResult = payload;
-    state.result = payload;
-    state.statusChangedNotice = null;
-    addResultToHistory(payload);
+    state.pendingAutoFetchSetup = { appId, passNo };
+    state.inlineWorkerFeedback = null;
     render();
   }
 
   async function runLiveCheck(opts) {
     const isLive = await ensureBackendStatus();
     if (!isLive && !getEffectiveApiBase()) {
-      activateStaticAssist(opts.appId, opts.passNo);
+      activateAutoFetchSetup(opts.appId, opts.passNo);
       return;
     }
 
@@ -603,7 +547,7 @@
     state.isRunning = true;
     state.showPipeline = true;
     state.streamError = null;
-    state.staticAssist = null;
+    state.pendingAutoFetchSetup = null;
     state.captchaPrompt = null;
     state.visaCaptchaOverride = null;
     state.ptCaptchaOverride = null;
@@ -635,14 +579,14 @@
 
       const contentType = (resp.headers.get("content-type") || "").toLowerCase();
       if (resp.status === 404 || resp.status === 405 || (resp.ok && contentType.includes("text/html"))) {
-        activateStaticAssist(opts.appId, opts.passNo);
+        activateAutoFetchSetup(opts.appId, opts.passNo);
         return;
       }
 
       if (!resp.ok) {
         const errJson = await resp.json().catch(() => null);
         if (!errJson) {
-          activateStaticAssist(opts.appId, opts.passNo);
+          activateAutoFetchSetup(opts.appId, opts.passNo);
           return;
         }
         throw new Error(errJson.error || `Server returned HTTP ${resp.status}.`);
@@ -719,7 +663,7 @@
         return;
       }
       if (err instanceof TypeError && !getEffectiveApiBase()) {
-        activateStaticAssist(opts.appId, opts.passNo);
+        activateAutoFetchSetup(opts.appId, opts.passNo);
         return;
       }
       state.streamError = err instanceof Error ? err.message : "Could not complete live status enquiry.";
@@ -1372,17 +1316,17 @@
           </div>
         ` : ""}
 
-        ${renderStaticAssist()}
+        ${renderAutoFetchSetup()}
 
         ${renderPipeline()}
 
-        ${state.result ? renderStatusReport() : !state.showPipeline && !state.staticAssist ? `
+        ${state.result ? renderStatusReport() : !state.showPipeline && !state.pendingAutoFetchSetup ? `
           <section class="overview-grid animate-rise">
             <div class="glass-panel overview-card">
               ${iconTile("amber", 38, "shieldCheck")}
               <div>
                 <h3 class="card-title" style="font-size:14px">Visa Decision</h3>
-                <p class="card-sub" style="font-size:12px">Indian Visa Online &amp; bilingual guidance</p>
+                <p class="card-sub" style="font-size:12px">Automatic lookup on Indian Visa Online</p>
               </div>
             </div>
             <div class="glass-panel overview-card">
@@ -1395,8 +1339,8 @@
             <div class="glass-panel overview-card">
               ${iconTile("emerald", 38, "sparkles")}
               <div>
-                <h3 class="card-title" style="font-size:14px">100% Free Hosting</h3>
-                <p class="card-sub" style="font-size:12px">Works free on GitHub Pages &amp; Worker proxy</p>
+                <h3 class="card-title" style="font-size:14px">100% Free Auto-Fetch</h3>
+                <p class="card-sub" style="font-size:12px">Export PNG cards &amp; monitor updates</p>
               </div>
             </div>
           </section>
@@ -1405,106 +1349,42 @@
     `;
   }
 
-  function renderStaticAssist() {
-    if (!state.staticAssist) return "";
-    const { appId, passNo } = state.staticAssist;
-    const center = resolveIvacCenter(appId);
-
+  function renderAutoFetchSetup() {
+    if (!state.pendingAutoFetchSetup) return "";
     return `
-      <section aria-label="Free Static Portal Assist" class="glass-panel card-pad animate-rise">
-        <div class="flex-between" style="flex-wrap:wrap;gap:12px;padding-bottom:16px;border-bottom:1px solid var(--line2)">
+      <section aria-label="Connect Free Auto-Fetcher" class="glass-panel card-pad animate-rise">
+        <div class="flex-between" style="flex-wrap:wrap;gap:12px;padding-bottom:14px;border-bottom:1px solid var(--line2)">
           <div class="flex-row">
-            ${iconTile("sky", 42, "globe")}
+            ${iconTile("sky", 42, "server")}
             <div>
-              <h3 class="card-title" style="font-size:17px">Free Portal Check &amp; Status Card Builder</h3>
+              <h3 class="card-title" style="font-size:17px">Connect Free Auto-Fetcher ($0/mo Cloudflare Worker)</h3>
               <p class="card-sub" style="font-size:12px">
-                Running free on static hosting (${esc(window.location.hostname)}). Copy your verified IDs below to check directly on the official government portals, or connect a 100% free Cloudflare Worker in Settings.
+                GitHub Pages (${esc(window.location.hostname)}) serves static files only and cannot bypass browser CORS alone. Connect your free Cloudflare Worker once below to automatically grab live statuses from indianvisaonline.gov.in and passtrack.net.
               </p>
             </div>
           </div>
-          <div class="flex-row" style="flex-wrap:wrap">
-            <button type="button" data-action="nav" data-section="appearance" class="btn-glass-ghost" style="padding:7px 12px;font-size:12px">Connect Free Worker ($0)</button>
-            <button type="button" data-action="close-assist" class="btn-glass-ghost" style="padding:7px 12px;font-size:12px">Dismiss</button>
-          </div>
+          <button type="button" data-action="close-assist" class="btn-glass-ghost" style="padding:7px 12px;font-size:12px">Dismiss</button>
         </div>
 
-        <div class="assist-grid">
-          <div style="display:flex;flex-direction:column;gap:14px">
-            <div class="assist-cred-list">
-              <div class="assist-cred-box">
-                <div style="min-width:0">
-                  <div class="field-label">Application ID · ${center ? esc(center.shortName) : "IVAC"}</div>
-                  <div class="font-mono" style="margin-top:2px;font-size:15px;font-weight:700;color:var(--tx-info)">
-                    ${state.maskAppId ? `${esc(appId.slice(0, 4))}••••••••` : esc(appId)}
-                  </div>
-                </div>
-                <button type="button" data-action="copy-text" data-field="app" data-value="${esc(appId)}" class="btn-glass-ghost" style="padding:7px 12px;font-size:12px">
-                  <span style="width:14px;height:14px;display:inline-flex">${state.copiedField === "app" ? ICONS.check : ICONS.copy}</span>
-                  <span>${state.copiedField === "app" ? "Copied" : "Copy ID"}</span>
-                </button>
-              </div>
+        <form id="inlineWorkerForm" style="display:flex;flex-wrap:wrap;gap:10px;margin-top:16px">
+          <input id="inlineWorkerUrlInput" type="url" required value="${esc(state.apiInput)}" placeholder="https://indiavisa-proxy.yourname.workers.dev" aria-label="Cloudflare Worker URL" class="glass-input" style="flex:1;min-width:240px;height:42px;padding:0 14px;font-family:var(--font-mono);font-size:12px" />
+          <button type="submit" ${state.testingApi ? "disabled" : ""} class="btn-glass-primary" style="height:42px;padding:0 18px;font-size:13px">${state.testingApi ? "Connecting..." : "Save & Auto-Fetch Status"}</button>
+        </form>
+        ${state.inlineWorkerFeedback ? `<p style="margin:10px 0 0;font-size:12px;font-weight:600;color:var(--tx-neg)">${esc(state.inlineWorkerFeedback)}</p>` : ""}
 
-              <div class="assist-cred-box">
-                <div style="min-width:0">
-                  <div class="field-label">Passport Number</div>
-                  <div class="font-mono" style="margin-top:2px;font-size:15px;font-weight:700">
-                    ${state.maskPassport ? `${esc(passNo.slice(0, 2))}••••••` : esc(passNo)}
-                  </div>
-                </div>
-                <button type="button" data-action="copy-text" data-field="pass" data-value="${esc(passNo)}" class="btn-glass-ghost" style="padding:7px 12px;font-size:12px">
-                  <span style="width:14px;height:14px;display:inline-flex">${state.copiedField === "pass" ? ICONS.check : ICONS.copy}</span>
-                  <span>${state.copiedField === "pass" ? "Copied" : "Copy Passport"}</span>
-                </button>
-              </div>
-            </div>
-
-            <div style="display:flex;flex-wrap:wrap;gap:10px">
-              <a href="https://indianvisaonline.gov.in/visa/StatusEnquiry" target="_blank" rel="noopener noreferrer" class="btn-glass-primary" style="flex:1;min-width:190px;padding:11px 16px;font-size:13px">
-                <span>1. Open Indian Visa Online</span>
-                <span style="width:14px;height:14px;display:inline-flex">${ICONS.externalLink}</span>
-              </a>
-              <a href="https://www.passtrack.net/regular_passport.php" target="_blank" rel="noopener noreferrer" class="btn-glass-ghost" style="flex:1;min-width:170px;padding:11px 14px;font-size:13px">
-                <span>2. Open IVAC Passtrack</span>
-                <span style="width:14px;height:14px;display:inline-flex">${ICONS.externalLink}</span>
-              </a>
-            </div>
+        <div class="worker-guide-box" style="margin-top:14px">
+          <div class="flex-between" style="flex-wrap:wrap;gap:8px">
+            <strong class="font-display" style="font-size:13px">1-Minute Free Worker Setup ($0 Forever · 100,000 requests/day)</strong>
+            <button type="button" data-action="copy-worker-code" class="btn-glass-emerald" style="padding:6px 12px;font-size:11px">
+              <span style="width:13px;height:13px;display:inline-flex">${ICONS.copy}</span>
+              <span>${state.workerCopyNotice || "Copy cloudflare-worker.js"}</span>
+            </button>
           </div>
-
-          <form id="staticAssistForm" class="glass-inset" style="padding:16px;display:flex;flex-direction:column;gap:12px">
-            <div>
-              <div class="font-display" style="font-size:14px;font-weight:700">Generate Bilingual Report &amp; PNG Card</div>
-              <p style="margin:2px 0 0;font-size:12px;color:var(--mut)">Select the result shown on the official portal to save &amp; export your card free.</p>
-            </div>
-
-            <div class="status-choice-grid">
-              ${STATUS_PRESETS.map((preset) => `
-                <button type="button" data-action="set-assist-cat" data-cat="${preset.category}" class="status-choice-btn ${state.assistCategory === preset.category ? "active" : ""}">
-                  <span>${esc(preset.label)}</span>
-                  ${state.assistCategory === preset.category ? `<span style="width:14px;height:14px;color:var(--tx-pos);display:inline-flex">${ICONS.check}</span>` : ""}
-                </button>
-              `).join("")}
-            </div>
-
-            <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
-              <div>
-                <label for="assistApplicantInput" class="field-label" style="display:block;margin-bottom:4px">Applicant Name (Optional)</label>
-                <input id="assistApplicantInput" type="text" value="${esc(state.assistApplicantName)}" placeholder="e.g., RAHIM UDDIN" class="glass-input" style="width:100%;height:38px;padding:0 12px;font-size:12px" />
-              </div>
-              <div>
-                <label for="assistPasstrackSelect" class="field-label" style="display:block;margin-bottom:4px">IVAC Delivery Stage</label>
-                <select id="assistPasstrackSelect" class="glass-input" style="width:100%;height:38px;padding:0 10px;font-size:12px">
-                  ${PASSTRACK_STAGE_PRESETS.map((st) => `<option value="${st.stepsDone}" ${Number(state.assistPasstrackStage) === st.stepsDone ? "selected" : ""}>${esc(st.label)}</option>`).join("")}
-                </select>
-              </div>
-            </div>
-
-            <div style="display:flex;justify-content:flex-end">
-              <button type="submit" class="btn-glass-emerald" style="padding:10px 18px;font-size:13px">
-                <span style="width:15px;height:15px;display:inline-flex">${ICONS.sparkles}</span>
-                <span>Generate Report &amp; Save</span>
-              </button>
-            </div>
-          </form>
+          <ol class="worker-step-list">
+            <li>Open <a href="https://dash.cloudflare.com" target="_blank" rel="noopener noreferrer" style="color:var(--tx-info);text-decoration:underline">dash.cloudflare.com</a> (free, no card) → <strong>Workers &amp; Pages → Create Worker</strong>.</li>
+            <li>Paste <strong>cloudflare-worker.js</strong> and click <strong>Deploy</strong>. (Optional: add free <code>GEMINI_API_KEY</code> from aistudio.google.com for hands-free CAPTCHA solving.)</li>
+            <li>Paste your <code>https://*.workers.dev</code> URL above and click <strong>Save &amp; Auto-Fetch Status</strong>.</li>
+          </ol>
         </div>
       </section>
     `;
@@ -1860,11 +1740,10 @@
       state.historySearch = target.value;
       const container = document.getElementById("historyGridContainer");
       if (container) container.innerHTML = renderHistoryCards();
-    } else if (target.id === "apiUrlInput") {
+    } else if (target.id === "apiUrlInput" || target.id === "inlineWorkerUrlInput") {
       state.apiInput = target.value;
       state.apiFeedback = null;
-    } else if (target.id === "assistApplicantInput") {
-      state.assistApplicantName = target.value.toUpperCase();
+      state.inlineWorkerFeedback = null;
     } else if (target.id === "submissionDatePicker") {
       state.submissionDate = target.value;
       render();
@@ -1873,10 +1752,6 @@
 
   document.addEventListener("change", async (e) => {
     const target = e.target;
-    if (target instanceof HTMLSelectElement && target.id === "assistPasstrackSelect") {
-      state.assistPasstrackStage = Number(target.value) || 0;
-      return;
-    }
     if (!(target instanceof HTMLInputElement)) return;
     if (target.id !== "receiptFileInput") return;
     const file = target.files && target.files[0];
@@ -1980,9 +1855,41 @@
       }
       state.validationError = null;
       runLiveCheck({ appId, passNo });
-    } else if (form.id === "staticAssistForm") {
+    } else if (form.id === "inlineWorkerForm" && state.pendingAutoFetchSetup) {
       e.preventDefault();
-      buildAssistResult();
+      const normalized = normalizeBaseUrl(state.apiInput);
+      if (!normalized) {
+        state.inlineWorkerFeedback = "Please enter your free Cloudflare Worker URL (https://...workers.dev).";
+        render();
+        return;
+      }
+      state.apiInput = normalized;
+      state.testingApi = true;
+      state.inlineWorkerFeedback = null;
+      render();
+      try {
+        localStorage.setItem(API_BASE_KEY, normalized);
+      } catch {
+        // ignore
+      }
+      try {
+        const resp = await fetch(apiUrl("/api/portal-health"));
+        const json = await resp.json().catch(() => null);
+        if (resp.ok && json && Array.isArray(json.portals)) {
+          state.backendStatus = "live";
+          state.testingApi = false;
+          const { appId, passNo } = state.pendingAutoFetchSetup;
+          state.pendingAutoFetchSetup = null;
+          runLiveCheck({ appId, passNo });
+          return;
+        }
+        state.inlineWorkerFeedback = `Endpoint responded with HTTP ${resp.status}. Deploy cloudflare-worker.js at that URL.`;
+      } catch {
+        state.inlineWorkerFeedback = "Could not reach that URL. Verify the Worker is deployed and HTTPS URL is correct.";
+      } finally {
+        state.testingApi = false;
+        render();
+      }
     } else if (form.id === "manualCaptchaForm" && state.captchaPrompt) {
       e.preventDefault();
       const visaInput = document.getElementById("visaCaptchaInput");
@@ -2079,25 +1986,9 @@
       state.captchaPrompt = null;
       render();
     } else if (action === "close-assist") {
-      state.staticAssist = null;
+      state.pendingAutoFetchSetup = null;
+      state.inlineWorkerFeedback = null;
       render();
-    } else if (action === "set-assist-cat") {
-      state.assistCategory = btn.getAttribute("data-cat") || "processed_printed";
-      render();
-    } else if (action === "copy-text") {
-      const field = btn.getAttribute("data-field");
-      const val = btn.getAttribute("data-value") || "";
-      if (val && navigator.clipboard) {
-        navigator.clipboard.writeText(val).catch(() => {});
-      }
-      state.copiedField = field;
-      render();
-      setTimeout(() => {
-        if (state.copiedField === field) {
-          state.copiedField = null;
-          render();
-        }
-      }, 1500);
     } else if (action === "toggle-worker-guide") {
       state.showWorkerGuide = !state.showWorkerGuide;
       state.workerCopyNotice = null;
