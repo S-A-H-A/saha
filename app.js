@@ -255,25 +255,56 @@
     apiFeedback: null,
   };
 
-  async function probeBackendHealth() {
-    try {
-      const resp = await fetch(apiUrl("/api/portal-health"), { method: "GET" });
-      const ct = (resp.headers.get("content-type") || "").toLowerCase();
-      if (!resp.ok || !ct.includes("application/json")) {
+  let backendProbePromise = null;
+
+  async function probeBackendHealth(force = false) {
+    if (!force && backendProbePromise) return backendProbePromise;
+    backendProbePromise = (async () => {
+      const configuredBase = getEffectiveApiBase();
+      if (!configuredBase) {
+        try {
+          const headResp = await fetch("./index.html", { method: "HEAD", cache: "no-store" });
+          const backendHeader = (headResp.headers.get("x-visatrack-backend") || "").toLowerCase();
+          const host = window.location.hostname.toLowerCase();
+          if (backendHeader === "express" || host === "localhost" || host === "127.0.0.1") {
+            state.backendStatus = "live";
+            return true;
+          }
+          state.backendStatus = "static";
+          return false;
+        } catch {
+          state.backendStatus = "static";
+          return false;
+        }
+      }
+
+      try {
+        const resp = await fetch(apiUrl("/api/portal-health"), { method: "GET" });
+        const ct = (resp.headers.get("content-type") || "").toLowerCase();
+        if (!resp.ok || !ct.includes("application/json")) {
+          state.backendStatus = "static";
+          return false;
+        }
+        const json = await resp.json().catch(() => null);
+        if (json && Array.isArray(json.portals)) {
+          state.backendStatus = "live";
+          return true;
+        }
+        state.backendStatus = "static";
+        return false;
+      } catch {
         state.backendStatus = "static";
         return false;
       }
-      const json = await resp.json().catch(() => null);
-      if (json && Array.isArray(json.portals)) {
-        state.backendStatus = "live";
-        return true;
-      }
-      state.backendStatus = "static";
-      return false;
-    } catch {
-      state.backendStatus = "static";
-      return false;
+    })();
+    return backendProbePromise;
+  }
+
+  async function ensureBackendStatus() {
+    if (state.backendStatus === "unknown") {
+      await probeBackendHealth();
     }
+    return state.backendStatus === "live";
   }
 
   if (!GLASS_THEMES.some((t) => t.id === state.theme)) {
@@ -559,7 +590,8 @@
   }
 
   async function runLiveCheck(opts) {
-    if (state.backendStatus === "static" && !getEffectiveApiBase()) {
+    const isLive = await ensureBackendStatus();
+    if (!isLive && !getEffectiveApiBase()) {
       activateStaticAssist(opts.appId, opts.passNo);
       return;
     }
@@ -1879,7 +1911,8 @@
         }
       }
 
-      if (state.backendStatus === "static" && !getEffectiveApiBase()) {
+      const isLive = await ensureBackendStatus();
+      if (!isLive && !getEffectiveApiBase()) {
         state.scanNotice = "Enter your 12-character Application ID and Passport Number directly above — works 100% free with zero setup.";
         state.scanningReceipt = false;
         render();
@@ -2135,14 +2168,14 @@
         ok: true,
         text: envUrl ? `Reset to build default (${envUrl}).` : "Reset to same-origin default (/api/*).",
       };
-      probeBackendHealth().then(() => render());
+      probeBackendHealth(true).then(() => render());
     }
   });
 
   // Boot
   applyTheme(state.theme);
   document.documentElement.lang = state.lang;
-  probeBackendHealth().then(() => {
+  probeBackendHealth(true).then(() => {
     if (state.activeSection === "appearance") render();
   });
 })();

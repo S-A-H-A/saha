@@ -1276,6 +1276,7 @@ async function startServer() {
 
   for (const [routePath, asset] of Object.entries(staticFiles)) {
     app.get(routePath, (_req, res) => {
+      res.setHeader("X-VisaTrack-Backend", "express");
       res.type(asset.type);
       res.sendFile(path.join(rootDir, asset.file));
     });
@@ -1285,6 +1286,7 @@ async function startServer() {
     if (req.path.startsWith("/api/")) {
       return next();
     }
+    res.setHeader("X-VisaTrack-Backend", "express");
     res.type("text/html; charset=utf-8");
     return res.sendFile(path.join(rootDir, "index.html"));
   });
